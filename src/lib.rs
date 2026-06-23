@@ -893,6 +893,8 @@ where
             .rrfe()
             .bit(filter.reject_remote_extended_frames)
         });
+
+        self.control.config.global_filter = filter;
     }
 }
 
