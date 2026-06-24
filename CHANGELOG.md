@@ -4,6 +4,7 @@
 
 * Update MSRV to 1.60
 * Allow timestamp to be accessed in all modes
+* Fix `select_interrupt_line_1` routing interrupts to the wrong line on G0/G4/L5, where the `ILS` register groups interrupts instead of having one bit each [#51]
 
 ## [v0.2.1] 2024-09-04
 
