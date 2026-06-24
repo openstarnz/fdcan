@@ -837,7 +837,7 @@ where
     pub fn set_interrupt_line_config(&mut self, l0int: Interrupts) {
         let can = self.registers();
 
-        can.ils.modify(|_, w| unsafe { w.bits(l0int.bits()) });
+        can.ils.modify(|_, w| unsafe { w.bits(l0int.ils_bits()) });
 
         self.control.config.interrupt_line_config = l0int;
     }
@@ -848,7 +848,7 @@ where
     pub fn select_interrupt_line_1(&mut self, l1int: Interrupts) {
         let can = self.registers();
 
-        can.ils.modify(|_, w| unsafe { w.bits(l1int.bits()) });
+        can.ils.modify(|_, w| unsafe { w.bits(l1int.ils_bits()) });
 
         self.control.config.interrupt_line_config = l1int;
     }

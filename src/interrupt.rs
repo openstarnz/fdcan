@@ -176,6 +176,96 @@ impl Interrupts {
     pub fn none() -> Self {
         Self::from_bits_truncate(0)
     }
+
+    /// Translates this interrupt set into the value to write to the `ILS`
+    /// (Interrupt Line Select) register to route these interrupts to line 1.
+    ///
+    /// On H7 the `ILS` register has one bit per interrupt, in the same layout
+    /// as the `IE`/`IR` registers (and therefore the same layout as
+    /// [`Interrupts`]), so this is the identity mapping.
+    #[cfg(feature = "fdcan_h7")]
+    pub(crate) fn ils_bits(self) -> u32 {
+        self.bits()
+    }
+
+    /// Translates this interrupt set into the value to write to the `ILS`
+    /// (Interrupt Line Select) register to route these interrupts to line 1.
+    ///
+    /// Unlike H7, the G0/G4/L5 `ILS` register does **not** have one bit per
+    /// interrupt. Instead the interrupt sources are arranged into seven groups,
+    /// each represented by a single "parent" bit in `ILS` (see the `FDCAN_ILS`
+    /// register in RM0440). All interrupts within a group share an interrupt
+    /// line and cannot be assigned individually.
+    ///
+    /// A group's parent bit is set whenever *any* of its member interrupts is
+    /// present in `self`, so requesting line 1 for a single interrupt
+    /// implicitly routes its entire group to line 1.
+    #[cfg(feature = "fdcan_g0_g4_l5")]
+    pub(crate) fn ils_bits(self) -> u32 {
+        // Mapping of each `ILS` parent bit to the interrupts it groups, per the
+        // `FDCAN_ILS` register description in RM0440.
+        let groups = [
+            // RXFIFO0
+            (
+                Interrupts::RX_FIFO0_NEW_MSG
+                    | Interrupts::RX_FIFO0_FULL
+                    | Interrupts::RX_FIFO0_MSG_LOST,
+                1 << 0,
+            ),
+            // RXFIFO1
+            (
+                Interrupts::RX_FIFO1_NEW_MSG
+                    | Interrupts::RX_FIFO1_FULL
+                    | Interrupts::RX_FIFO1_MSG_LOST,
+                1 << 1,
+            ),
+            // SMSG (status message)
+            (
+                Interrupts::RX_HIGH_PRIO
+                    | Interrupts::TX_COMPLETE
+                    | Interrupts::TX_CANCEL,
+                1 << 2,
+            ),
+            // TFERR (Tx FIFO error)
+            (
+                Interrupts::TX_EMPTY
+                    | Interrupts::TX_EVENT_NEW
+                    | Interrupts::TX_EVENT_FULL
+                    | Interrupts::TX_EVENT_LOST,
+                1 << 3,
+            ),
+            // MISC
+            (
+                Interrupts::TS_WRAP_AROUND
+                    | Interrupts::MSG_RAM_ACCESS_FAILURE
+                    | Interrupts::TIMEOUT_OCCURRED,
+                1 << 4,
+            ),
+            // BERR (bit and line error)
+            (
+                Interrupts::ERR_LOG_OVERFLOW | Interrupts::ERR_PASSIVE,
+                1 << 5,
+            ),
+            // PERR (protocol error)
+            (
+                Interrupts::WARNING_STATUS
+                    | Interrupts::BUS_OFF
+                    | Interrupts::WATCHDOG_INT
+                    | Interrupts::PROT_ERR_ARBRITATION
+                    | Interrupts::PROT_ERR_DATA
+                    | Interrupts::RESERVED_ACCESS,
+                1 << 6,
+            ),
+        ];
+
+        let mut ils = 0;
+        for &(members, parent) in &groups {
+            if self.intersects(members) {
+                ils |= parent;
+            }
+        }
+        ils
+    }
 }
 
 impl From<Interrupt> for Interrupts {
@@ -220,5 +310,82 @@ mod tests {
         let mut ints = Interrupts::RX_FIFO0_FULL;
         ints |= Interrupt::RxFifo1Full;
         assert_eq!(ints, Interrupts::RX_FIFO0_FULL | Interrupts::RX_FIFO1_FULL);
+    }
+}
+
+#[cfg(all(test, feature = "fdcan_g0_g4_l5"))]
+mod g0_g4_l5_ils_tests {
+    use super::*;
+
+    // ILS parent-bit positions, per the `FDCAN_ILS` register in RM0440.
+    const RXFIFO0: u32 = 1 << 0;
+    const RXFIFO1: u32 = 1 << 1;
+    const SMSG: u32 = 1 << 2;
+    const TFERR: u32 = 1 << 3;
+    const MISC: u32 = 1 << 4;
+    const BERR: u32 = 1 << 5;
+    const PERR: u32 = 1 << 6;
+
+    #[test]
+    fn empty_set_maps_to_no_lines() {
+        assert_eq!(Interrupts::none().ils_bits(), 0);
+    }
+
+    #[test]
+    fn each_interrupt_maps_to_its_group() {
+        let cases = [
+            (Interrupt::RxFifo0NewMsg, RXFIFO0),
+            (Interrupt::RxFifo0Full, RXFIFO0),
+            (Interrupt::RxFifo0MsgLost, RXFIFO0),
+            (Interrupt::RxFifo1NewMsg, RXFIFO1),
+            (Interrupt::RxFifo1Full, RXFIFO1),
+            (Interrupt::RxFifo1MsgLost, RXFIFO1),
+            (Interrupt::RxHighPrio, SMSG),
+            (Interrupt::TxComplete, SMSG),
+            (Interrupt::TxCancel, SMSG),
+            (Interrupt::TxEmpty, TFERR),
+            (Interrupt::TxEventNew, TFERR),
+            (Interrupt::TxEventFull, TFERR),
+            (Interrupt::TxEventLost, TFERR),
+            (Interrupt::TsWrapAround, MISC),
+            (Interrupt::MsgRamAccessFailure, MISC),
+            (Interrupt::TimeoutOccurred, MISC),
+            (Interrupt::ErrLogOverflow, BERR),
+            (Interrupt::ErrPassive, BERR),
+            // RM0440 groups Warning Status and Bus Off under PERR, not BERR.
+            (Interrupt::WarningStatus, PERR),
+            (Interrupt::BusOff, PERR),
+            (Interrupt::WatchdogInt, PERR),
+            (Interrupt::ProtErrArbritation, PERR),
+            (Interrupt::ProtErrData, PERR),
+            (Interrupt::ReservedAccess, PERR),
+        ];
+        for (int, expected) in cases {
+            assert_eq!(
+                Interrupts::from(int).ils_bits(),
+                expected,
+                "{:?} mapped to the wrong ILS group",
+                int
+            );
+        }
+    }
+
+    #[test]
+    fn any_member_routes_the_whole_group() {
+        // A single interrupt and the full group collapse to the same parent bit.
+        let whole_rxfifo0 = Interrupts::RX_FIFO0_NEW_MSG
+            | Interrupts::RX_FIFO0_FULL
+            | Interrupts::RX_FIFO0_MSG_LOST;
+        assert_eq!(whole_rxfifo0.ils_bits(), RXFIFO0);
+        assert_eq!(Interrupts::RX_FIFO0_FULL.ils_bits(), RXFIFO0);
+    }
+
+    #[test]
+    fn interrupts_in_different_groups_set_distinct_bits() {
+        let ints = Interrupts::RX_FIFO0_NEW_MSG
+            | Interrupts::TX_COMPLETE
+            | Interrupts::ERR_PASSIVE
+            | Interrupts::BUS_OFF;
+        assert_eq!(ints.ils_bits(), RXFIFO0 | SMSG | BERR | PERR);
     }
 }
