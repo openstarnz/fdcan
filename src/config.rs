@@ -427,6 +427,14 @@ impl FdCanConfig {
 
     /// Selects Interrupt Line 1 for the given interrupts. Interrupt Line 0 is
     /// selected for all other interrupts
+    ///
+    /// # Note for G0/G4/L5
+    ///
+    /// On these families the `ILS` register groups interrupts into seven
+    /// categories (RX FIFO 0/1, status message, Tx FIFO error, misc, bit/line
+    /// error and protocol error) that share a single line-select bit each.
+    /// Interrupts cannot be assigned to a line individually: requesting line 1
+    /// for any interrupt routes its entire group to line 1.
     #[inline]
     pub const fn select_interrupt_line_1(mut self, l1int: Interrupts) -> Self {
         self.interrupt_line_config = l1int;
