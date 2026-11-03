@@ -459,23 +459,16 @@ where
     }
 
     /// Retrieve the current protocol status
+    #[inline]
     pub fn get_protocol_status(&self) -> ProtocolStatus {
-        let psr = self.registers().psr.read();
-        let lec = if psr.redl().bit_is_set() && psr.rbrs().bit_is_set() {
-            // Last error from data phase of a FDCAN format frame with its BRS
-            // flag set
-            psr.dlec().bits()
-        } else {
-            psr.lec().bits()
-        };
-        ProtocolStatus {
-            activity: Activity::try_from(0 /*psr.act().bits()*/).unwrap(), //TODO: stm32g4 does not allow reading from this register
-            transmitter_delay_comp: psr.tdcv().bits(),
-            bus_off_status: psr.bo().bit_is_set(),
-            error_warning: psr.ew().bit_is_set(),
-            error_passive_state: psr.ep().bit_is_set(),
-            last_error: LastErrorCode::try_from(lec).unwrap(),
-        }
+        self.control.get_protocol_status()
+    }
+
+    /// If the peripheral is Bus_Off, start bus-off recovery. See
+    /// [`FdCanControl::start_bus_off_recovery`].
+    #[inline]
+    pub fn start_bus_off_recovery(&mut self) -> bool {
+        self.control.start_bus_off_recovery()
     }
 
     /// Check if the interrupt is triggered
@@ -1183,6 +1176,62 @@ where
     #[inline]
     pub fn timestamp(&self) -> u16 {
         self.registers().tscv.read().tsc().bits()
+    }
+
+    /// Retrieve the current protocol status
+    ///
+    /// Reading the protocol status register resets its last error codes
+    /// (`last_error`) to "no change".
+    pub fn get_protocol_status(&self) -> ProtocolStatus {
+        let psr = self.registers().psr.read();
+        let lec = if psr.redl().bit_is_set() && psr.rbrs().bit_is_set() {
+            // Last error from data phase of a FDCAN format frame with its BRS
+            // flag set
+            psr.dlec().bits()
+        } else {
+            psr.lec().bits()
+        };
+        ProtocolStatus {
+            activity: Activity::try_from(0 /*psr.act().bits()*/).unwrap(), //TODO: stm32g4 does not allow reading from this register
+            transmitter_delay_comp: psr.tdcv().bits(),
+            bus_off_status: psr.bo().bit_is_set(),
+            error_warning: psr.ew().bit_is_set(),
+            error_passive_state: psr.ep().bit_is_set(),
+            last_error: LastErrorCode::try_from(lec).unwrap(),
+        }
+    }
+
+    /// If the peripheral is Bus_Off, start the bus-off recovery sequence and
+    /// return `true`. Otherwise do nothing and return `false`.
+    ///
+    /// When the transmit error counter passes 255 the peripheral goes
+    /// Bus_Off: it sets `CCCR.INIT` by itself, which stops all bus activity,
+    /// and stays off the bus until software clears `INIT` again. Clearing it
+    /// starts the recovery sequence defined by ISO 11898-1: the peripheral
+    /// waits for 129 occurrences of 11 consecutive recessive bits, then resets
+    /// its error counters and rejoins the bus. That wait can't be shortened.
+    ///
+    /// Recovery completes when [`ProtocolStatus::bus_off_status`] clears (the
+    /// [`Interrupt::BusOff`] flag is set on both entering and leaving
+    /// Bus_Off). Transmissions requested before the bus-off are sent once the
+    /// peripheral is back on the bus.
+    ///
+    /// Recovering immediately every time can keep a node with a persistent
+    /// fault (wiring, an identifier clash) cycling through bus-off, disturbing
+    /// the bus each time it rejoins; consider backing off between attempts.
+    ///
+    /// Like [`get_protocol_status`](Self::get_protocol_status), this reads the
+    /// protocol status register, resetting its last error codes.
+    pub fn start_bus_off_recovery(&mut self) -> bool {
+        let can = self.registers();
+        if can.psr.read().bo().bit_is_clear() {
+            return false;
+        }
+        // As when leaving initialization mode: CCE first (it can only be
+        // written while INIT is set), then INIT. The configuration is kept.
+        can.cccr.modify(|_, w| w.cce().clear_bit());
+        can.cccr.modify(|_, w| w.init().clear_bit());
+        true
     }
 
     /// Check if the interrupt is triggered

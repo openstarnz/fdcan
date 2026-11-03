@@ -5,6 +5,8 @@
 * Update MSRV to 1.60
 * Allow timestamp to be accessed in all modes
 * Fix `select_interrupt_line_1` routing interrupts to the wrong line on G0/G4/L5, where the `ILS` register groups interrupts instead of having one bit each [#51]
+* Add `start_bus_off_recovery` to `FdCan` and `FdCanControl`, to rejoin the bus after Bus_Off
+* Add `get_protocol_status` to `FdCanControl`, so the split control half can read the bus state
 
 ## [v0.2.1] 2024-09-04
 
